@@ -2,10 +2,10 @@
   <img src="assets/logo.svg" width="250" alt="Logo" >
 </p>
 
-<h1 align="center">Dreeve Zwift Connector</h1>
+<h1 align="center">UNOFFICIAL Dreeve Zwift Connector</h1>
 
 <p align="center">
-<a href="https://raw.githubusercontent.com/dreeveapp/dreeve-zwift-connector/refs/heads/main/LICENSE"><img src="https://img.shields.io/github/license/dreeveapp/dreeve-zwift-connector?color=428f7e&logo=open%20source%20initiative&logoColor=white" alt="License"></a>
+<a href="https://raw.githubusercontent.com/dreeveapp/dreeve-wahoo-connector/refs/heads/main/LICENSE"><img src="https://img.shields.io/github/license/dreeveapp/dreeve-wahoo-connector?color=428f7e&logo=open%20source%20initiative&logoColor=white" alt="License"></a>
 <a href="https://docs.dreeve.app"><img src="https://img.shields.io/badge/docs-docs.dreeve.app-428f7e?logo=readthedocs&logoColor=white" alt="Documentation"></a>
 <a href="https://discord.gg/p4zpZyCHNc"><img src="https://img.shields.io/badge/Dreeve-%235865F4?logo=discord&logoColor=%23ffffff&label=%20&labelColor=585858" alt="Discord server"></a>
 </p>
