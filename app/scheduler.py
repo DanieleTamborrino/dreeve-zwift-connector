@@ -2,11 +2,11 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from croniter import croniter
 from app.sync import perform_sync, load_tokens
 
-logger = logging.getLogger("wahoo_connector.scheduler")
+logger = logging.getLogger("zwift_connector.scheduler")
 
 class SyncScheduler:
     def __init__(self):
@@ -22,7 +22,7 @@ class SyncScheduler:
     def get_next_cron_run(self, now=None):
         """Calculate next scheduled run time using 5-field cron format."""
         if not now:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
         try:
             iter_obj = croniter(self.cron_expr, now)
             return iter_obj.get_next(datetime)
@@ -48,7 +48,7 @@ class SyncScheduler:
         time.sleep(3)
 
         while not self._stop_event.is_set():
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             next_run = self.get_next_cron_run(now)
 
             if not next_run:
@@ -79,7 +79,7 @@ class SyncScheduler:
             return {"status": "in_progress", "message": "Sync is already in progress."}
 
         self.is_syncing = True
-        self.last_sync_time = datetime.utcnow().isoformat() + "Z"
+        self.last_sync_time = datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
         
         def _worker():
             try:
@@ -88,7 +88,7 @@ class SyncScheduler:
                 self.last_result = result
             except Exception as e:
                 logger.error(f"Unhandled exception during sync: {e}")
-                self.last_result = {"status": "error", "message": str(e), "timestamp": datetime.utcnow().isoformat() + "Z"}
+                self.last_result = {"status": "error", "message": str(e), "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"}
             finally:
                 self.is_syncing = False
 

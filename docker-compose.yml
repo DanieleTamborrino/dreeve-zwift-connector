@@ -1,26 +1,30 @@
 services:
-  wahoo-connector:
+  zwift-connector:
     # Build locally or pull pre-built image from GitHub Container Registry (GHCR)
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/dreeveapp/dreeve-wahoo-connector:latest
-    container_name: dreeve-wahoo-connector
+    image: ghcr.io/dreeveapp/dreeve-zwift-connector:latest
+    container_name: dreeve-zwift-connector
     restart: unless-stopped
     ports:
-      - "${PORT:-8085}:8085"
+      - "${PORT:-8087}:8087"
     env_file:
       - .env
     environment:
-      - WAHOO_CLIENT_ID=${WAHOO_CLIENT_ID}
-      - WAHOO_CLIENT_SECRET=${WAHOO_CLIENT_SECRET}
-      - WAHOO_REDIRECT_URI=${WAHOO_REDIRECT_URI:-https://localhost:8085/callback}
-      - WAHOO_SCOPES=${WAHOO_SCOPES:-user_read workouts_read}
+      - ZWIFT_EMAIL=${ZWIFT_EMAIL}
+      - ZWIFT_PASSWORD=${ZWIFT_PASSWORD}
       - SYNC_TIME_WINDOW=${SYNC_TIME_WINDOW:-1_week}
       - SYNC_CRON=${SYNC_CRON:-0 2 * * *}
-      - PORT=${PORT:-8085}
+      - PORT=${PORT:-8087}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DATA_DIR=/data
     volumes:
-      - ./config:${STATE_DIR:-/data/config}
-      - ./activities:${WATCH_DIR:-/data/downloads}
+      - conf_data:${STATE_DIR:-/data/config}
+      - actv_data:${WATCH_DIR:-/data/downloads}
+
+volumes:
+  conf_data:
+    driver: local
+  actv_data:
+    driver: local

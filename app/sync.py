@@ -2,10 +2,10 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta
-from app.wahoo_client import WahooClient
+from datetime import datetime, timedelta, timezone
+from app.zwift_client import ZwiftClient
 
-logger = logging.getLogger("wahoo_connector.sync")
+logger = logging.getLogger("zwift_connector.sync")
 
 def get_data_paths():
     data_dir = os.getenv("DATA_DIR", "/data")
@@ -33,8 +33,11 @@ def load_tokens() -> dict:
 
 def save_tokens(tokens: dict):
     paths = get_data_paths()
-    if "expires_in" in tokens and "expires_at" not in tokens:
-        tokens["expires_at"] = int(time.time()) + int(tokens["expires_in"])
+    if "expires_at" not in tokens:
+        expires_in = tokens.get("expires_in")
+        if expires_in is None:
+            expires_in = 3600
+        tokens["expires_at"] = int(time.time()) + int(expires_in)
 
     with open(paths["tokens"], "w", encoding="utf-8") as f:
         json.dump(tokens, f, indent=2)
@@ -52,7 +55,7 @@ def load_history() -> dict:
 
 def save_history(history: dict):
     paths = get_data_paths()
-    history["last_sync"] = datetime.utcnow().isoformat() + "Z"
+    history["last_sync"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
     with open(paths["history"], "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2)
 
@@ -81,7 +84,7 @@ def get_all_activities() -> list:
     for workout_id, hist_entry in downloaded_map.items():
         str_id = str(workout_id)
         seen_ids.add(str_id)
-        fn = hist_entry.get("filename") or f"workout_{str_id}.fit"
+        fn = hist_entry.get("filename") or f"activity_{str_id}.fit"
         
         if fn in disk_files:
             size_bytes = disk_files[fn]
@@ -105,7 +108,11 @@ def get_all_activities() -> list:
         workout_id = fn.replace(".fit", "")
         workout_date = "N/A"
         
-        if "_workout_" in fn:
+        if "_activity_" in fn:
+            parts = fn.split("_activity_")
+            workout_date = parts[0]
+            workout_id = parts[1].replace(".fit", "")
+        elif "_workout_" in fn:
             parts = fn.split("_workout_")
             workout_date = parts[0]
             workout_id = parts[1].replace(".fit", "")
@@ -119,7 +126,7 @@ def get_all_activities() -> list:
         downloaded_at = None
         if os.path.exists(file_path):
             mtime = os.path.getmtime(file_path)
-            downloaded_at = datetime.utcfromtimestamp(mtime).isoformat() + "Z"
+            downloaded_at = datetime.fromtimestamp(mtime, timezone.utc).replace(tzinfo=None).isoformat() + "Z"
 
         activities.append({
             "id": str_id,
@@ -137,7 +144,7 @@ def get_cutoff_datetime(time_window: str):
     if not time_window or time_window == "all_time":
         return None
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     if time_window == "1_day":
         return now - timedelta(days=1)
     elif time_window == "1_week":
@@ -149,68 +156,69 @@ def get_cutoff_datetime(time_window: str):
 
     return None
 
-def extract_fit_url(workout: dict) -> str:
-    """Extract .FIT download URL from various possible fields in Wahoo workout response."""
-    summary = workout.get("workout_summary")
-    if isinstance(summary, dict):
-        f = summary.get("file")
-        if isinstance(f, dict) and f.get("url"):
-            return f.get("url")
-
-    f = workout.get("file")
-    if isinstance(f, dict) and f.get("url"):
-        return f.get("url")
-
-    if workout.get("file_url"):
-        return workout.get("file_url")
-
-    return None
-
 def perform_sync(time_window: str = None) -> dict:
-    """
-    Main sync logic with Time Selector filtering (defaults to 1_week):
-    1. Verify / refresh tokens
-    2. Fetch workouts from Wahoo API in DESCENDING order (newest first)
-    3. Filter by selected time window (1_day, 1_week, 1_month, 1_year, all_time)
-    4. Check local history & disk for deduplication
-    5. Download missing FIT files
-    """
     if not time_window:
         time_window = os.getenv("SYNC_TIME_WINDOW", "1_week")
 
-    client_id = os.getenv("WAHOO_CLIENT_ID")
-    client_secret = os.getenv("WAHOO_CLIENT_SECRET")
-    redirect_uri = os.getenv("WAHOO_REDIRECT_URI", "https://localhost:8085/callback")
+    email = os.getenv("ZWIFT_EMAIL")
+    password = os.getenv("ZWIFT_PASSWORD")
 
-    if not client_id or not client_secret:
-        return {"status": "error", "message": "WAHOO_CLIENT_ID and WAHOO_CLIENT_SECRET must be set in environment."}
+    if not email or not password:
+        return {"status": "error", "message": "ZWIFT_EMAIL and ZWIFT_PASSWORD must be set in environment."}
 
-    client = WahooClient(client_id, client_secret, redirect_uri)
+    client = ZwiftClient(email, password)
     tokens = load_tokens()
-
-    if not tokens or "access_token" not in tokens:
-        return {"status": "error", "message": "Not authenticated with Wahoo yet. Please complete OAuth login via Web UI."}
-
-    expires_at = tokens.get("expires_at", 0)
+    
     current_time = int(time.time())
-
-    if current_time > (expires_at - 300):
-        refresh_token = tokens.get("refresh_token")
-        if not refresh_token:
-            return {"status": "error", "message": "Access token expired and no refresh token available. Please re-authenticate."}
-        
-        logger.info("Access token expired or expiring soon. Refreshing token...")
+    
+    # Authenticate or refresh
+    if not tokens or "access_token" not in tokens:
+        logger.info("No tokens found. Authenticating with Zwift...")
         try:
-            new_tokens = client.refresh_access_token(refresh_token)
-            if "refresh_token" not in new_tokens:
-                new_tokens["refresh_token"] = refresh_token
-            save_tokens(new_tokens)
-            tokens = new_tokens
+            tokens = client.authenticate()
+            save_tokens(tokens)
         except Exception as e:
-            logger.error(f"Failed to refresh access token: {e}")
-            return {"status": "error", "message": f"Failed to refresh access token: {str(e)}"}
+            return {"status": "error", "message": f"Failed to authenticate with Zwift: {str(e)}"}
+    else:
+        expires_at = tokens.get("expires_at", 0)
+        if current_time > (expires_at - 300):
+            refresh_token = tokens.get("refresh_token")
+            if not refresh_token:
+                logger.info("No refresh token. Re-authenticating...")
+                try:
+                    tokens = client.authenticate()
+                    save_tokens(tokens)
+                except Exception as e:
+                    return {"status": "error", "message": f"Failed to authenticate with Zwift: {str(e)}"}
+            else:
+                logger.info("Access token expired or expiring soon. Refreshing token...")
+                try:
+                    new_tokens = client.refresh_access_token(refresh_token)
+                    if "refresh_token" not in new_tokens:
+                        new_tokens["refresh_token"] = refresh_token
+                    # Make sure we keep profile_id if not present
+                    if "profile_id" not in new_tokens and "profile_id" in tokens:
+                        new_tokens["profile_id"] = tokens["profile_id"]
+                    save_tokens(new_tokens)
+                    tokens = new_tokens
+                except Exception as e:
+                    logger.error(f"Failed to refresh access token: {e}")
+                    # Try password auth as fallback
+                    try:
+                        tokens = client.authenticate()
+                        save_tokens(tokens)
+                    except Exception as e2:
+                        return {"status": "error", "message": f"Failed to authenticate with Zwift: {str(e2)}"}
 
     access_token = tokens["access_token"]
+    profile_id = tokens.get("profile_id")
+    if not profile_id:
+        # Fallback to decode it if missing
+        profile_id = client._decode_jwt_profile_id(access_token)
+        
+    if not profile_id:
+        return {"status": "error", "message": "Could not determine Zwift profile ID from token."}
+
     paths = get_data_paths()
     history = load_history()
     downloaded_map = history.get("downloaded", {})
@@ -219,43 +227,37 @@ def perform_sync(time_window: str = None) -> dict:
     if cutoff_dt:
         logger.info(f"Filtering sync to time window: {time_window} (Cutoff: {cutoff_dt.isoformat()}Z)")
 
-    page = 1
-    per_page = 50
+    start = 0
+    limit = 50
     total_new = 0
     total_skipped = 0
     total_processed = 0
     errors = []
     stop_sync = False
 
-    logger.info(f"Starting Wahoo workout sync (time_window={time_window})...")
+    logger.info(f"Starting Zwift activity sync (time_window={time_window})...")
 
     while not stop_sync:
         try:
-            data = client.fetch_workouts(access_token, page=page, per_page=per_page)
+            activities = client.fetch_activities(access_token, profile_id, start=start, limit=limit)
         except Exception as e:
-            logger.error(f"Error fetching workouts page {page}: {e}")
-            errors.append(f"Page {page} fetch error: {str(e)}")
+            logger.error(f"Error fetching activities starting at {start}: {e}")
+            errors.append(f"Offset {start} fetch error: {str(e)}")
             break
 
-        workouts = []
-        if isinstance(data, dict):
-            workouts = data.get("workouts", [])
-        elif isinstance(data, list):
-            workouts = data
-
-        if not workouts:
-            logger.info("No more workouts returned from API.")
+        if not activities:
+            logger.info("No more activities returned from API.")
             break
 
         consecutive_existing_count = 0
 
-        for workout in workouts:
+        for activity in activities:
             total_processed += 1
-            workout_id = str(workout.get("id"))
-            starts_str = workout.get("starts") or workout.get("created_at") or workout.get("workout_summary", {}).get("starts") or ""
+            activity_id = str(activity.get("id_str", activity.get("id")))
+            starts_str = activity.get("startDate") or ""
             
             starts_dt = None
-            date_prefix = "workout"
+            date_prefix = "activity"
             if starts_str:
                 try:
                     starts_dt = datetime.fromisoformat(starts_str.replace("Z", "+00:00")).replace(tzinfo=None)
@@ -264,52 +266,56 @@ def perform_sync(time_window: str = None) -> dict:
                     date_prefix = starts_str[:10]
 
             if cutoff_dt and starts_dt and starts_dt < cutoff_dt:
-                logger.info(f"Workout {workout_id} ({starts_str}) is older than cutoff {cutoff_dt.isoformat()}Z. Time window limit reached.")
+                logger.info(f"Activity {activity_id} ({starts_str}) is older than cutoff {cutoff_dt.isoformat()}Z. Time window limit reached.")
                 stop_sync = True
                 break
 
-            filename = f"{date_prefix}_workout_{workout_id}.fit"
+            filename = f"{date_prefix}_activity_{activity_id}.fit"
             dest_path = os.path.join(paths["downloads"], filename)
 
             verify_disk = os.getenv("VERIFY_FILES_ON_DISK", "false").lower() in ["true", "1", "yes"]
-            is_already_downloaded = (workout_id in downloaded_map) and (not verify_disk or os.path.exists(dest_path))
+            is_already_downloaded = (activity_id in downloaded_map) and (not verify_disk or os.path.exists(dest_path))
 
             if is_already_downloaded:
                 total_skipped += 1
                 consecutive_existing_count += 1
-                logger.debug(f"Workout {workout_id} ({filename}) already downloaded. Skipping.")
+                logger.debug(f"Activity {activity_id} ({filename}) already downloaded. Skipping.")
                 continue
 
             consecutive_existing_count = 0
-            fit_url = extract_fit_url(workout)
-            if not fit_url:
-                logger.warning(f"Workout {workout_id} does not have a FIT file URL available. Skipping.")
-                continue
-
+            
             try:
-                client.download_file(fit_url, dest_path)
-                downloaded_map[workout_id] = {
-                    "id": workout_id,
+                details = client.fetch_activity_details(access_token, activity_id)
+                bucket = details.get("fitFileBucket")
+                key = details.get("fitFileKey")
+                
+                if not bucket or not key:
+                    logger.warning(f"Activity {activity_id} does not have a FIT file bucket/key. Skipping.")
+                    continue
+                    
+                client.download_file(bucket, key, dest_path)
+                downloaded_map[activity_id] = {
+                    "id": activity_id,
                     "starts": starts_str,
                     "filename": filename,
-                    "downloaded_at": datetime.utcnow().isoformat() + "Z"
+                    "downloaded_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
                 }
                 total_new += 1
-                logger.info(f"Successfully downloaded new workout {workout_id} -> {filename}")
+                logger.info(f"Successfully downloaded new activity {activity_id} -> {filename}")
             except Exception as e:
-                logger.error(f"Failed to download FIT file for workout {workout_id}: {e}")
-                errors.append(f"Workout {workout_id} download error: {str(e)}")
+                logger.error(f"Failed to download FIT file for activity {activity_id}: {e}")
+                errors.append(f"Activity {activity_id} download error: {str(e)}")
 
         if stop_sync:
             break
 
-        if consecutive_existing_count >= len(workouts) and len(workouts) > 0:
-            logger.info("Encountered fully synced page of existing workouts. Incremental sync complete!")
+        if consecutive_existing_count >= len(activities) and len(activities) > 0:
+            logger.info("Encountered fully synced page of existing activities. Incremental sync complete!")
             break
 
-        if len(workouts) < per_page:
+        if len(activities) < limit:
             break
-        page += 1
+        start += limit
 
     history["downloaded"] = downloaded_map
     save_history(history)
@@ -321,7 +327,7 @@ def perform_sync(time_window: str = None) -> dict:
         "total_processed": total_processed,
         "time_window": time_window,
         "errors": errors,
-        "timestamp": datetime.utcnow().isoformat() + "Z"
+        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
     }
 
     logger.info(f"Sync complete ({time_window}). New downloads: {total_new}, Skipped: {total_skipped}, Errors: {len(errors)}")

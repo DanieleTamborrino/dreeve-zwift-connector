@@ -1,1 +1,1 @@
-# dreeve-wahoo-connector application package
+# dreeve-zwift-connector application package

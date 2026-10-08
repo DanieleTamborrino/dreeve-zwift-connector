@@ -28,5 +28,5 @@ EXPOSE 8085
 # Define persistent data volume
 VOLUME ["/data"]
 
-# Run dreeve-wahoo-connector application
+# Run dreeve-zwift-connector application
 CMD ["python", "-m", "app.main"]

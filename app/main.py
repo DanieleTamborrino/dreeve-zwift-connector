@@ -17,14 +17,14 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
-logger = logging.getLogger("wahoo_connector")
+logger = logging.getLogger("zwift_connector")
 
-from app.wahoo_client import WahooClient
+from app.zwift_client import ZwiftClient
 from app.sync import load_tokens, save_tokens, load_history, get_all_activities, get_data_paths
 from app.scheduler import scheduler
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "wahoo_connector_secret_key_12345")
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "zwift_connector_secret_key_12345")
 
 def ensure_ssl_certs():
     """Generate self-signed SSL certificates if they don't exist yet."""
@@ -57,7 +57,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>dreeve-wahoo-connector</title>
+    <title>dreeve-zwift-connector</title>
     <link rel="icon" type="image/png" href="/static/icon.png">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -377,16 +377,16 @@ HTML_TEMPLATE = """
     <div class="container">
         <header>
             <div class="logo-title">
-                <img src="/static/icon.png" class="logo-img" alt="dreeve-wahoo-connector logo">
+                <img src="/static/icon.png" class="logo-img" alt="dreeve-zwift-connector logo">
                 <div>
-                    <h1>dreeve-wahoo-connector</h1>
+                    <h1>dreeve-zwift-connector</h1>
                     <div style="font-size: 0.8rem; color: var(--text-secondary);">Automatic FIT File Downloader</div>
                 </div>
             </div>
 
             {% if authenticated %}
                 <div class="status-badge status-connected">
-                    <span class="dot"></span> Connected to Wahoo
+                    <span class="dot"></span> Zwift Configured
                 </div>
             {% else %}
                 <div class="status-badge status-disconnected">
@@ -447,11 +447,11 @@ HTML_TEMPLATE = """
                     <div class="time-selector-group">
                         <span class="time-label">Sync Time Window:</span>
                         <select id="time-window-select" class="time-select">
-                            <option value="1_day">1 Day (Last 24 Hours)</option>
-                            <option value="1_week" selected>1 Week (Last 7 Days)</option>
-                            <option value="1_month">1 Month (Last 30 Days)</option>
-                            <option value="1_year">1 Year (Last 365 Days)</option>
-                            <option value="all_time">All Time (Full Sync)</option>
+                            <option value="1_day" {% if default_time_window == '1_day' %}selected{% endif %}>1 Day (Last 24 Hours)</option>
+                            <option value="1_week" {% if default_time_window == '1_week' %}selected{% endif %}>1 Week (Last 7 Days)</option>
+                            <option value="1_month" {% if default_time_window == '1_month' %}selected{% endif %}>1 Month (Last 30 Days)</option>
+                            <option value="1_year" {% if default_time_window == '1_year' %}selected{% endif %}>1 Year (Last 365 Days)</option>
+                            <option value="all_time" {% if default_time_window == 'all_time' %}selected{% endif %}>All Time (Full Sync)</option>
                         </select>
                     </div>
 
@@ -460,16 +460,16 @@ HTML_TEMPLATE = """
                             <span class="spinner" id="btn-spinner" style="display: {% if is_syncing %}inline-block{% else %}none{% endif %};"></span>
                             <span id="btn-text">{% if is_syncing %}Syncing...{% else %}Sync Now{% endif %}</span>
                         </button>
-                        <a href="/login" class="btn btn-secondary">Re-authorize Wahoo</a>
+                        
                     </div>
                 </div>
             {% else %}
                 <div class="control-panel">
                     <div>
-                        <strong>Wahoo Account Required</strong>
-                        <div style="font-size: 0.85rem; color: var(--text-secondary);">Connect your Wahoo account to start downloading .FIT files.</div>
+                        <strong>Zwift Credentials Required</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-secondary);">Set ZWIFT_EMAIL and ZWIFT_PASSWORD in your environment to start downloading .FIT files.</div>
                     </div>
-                    <a href="/login" class="btn btn-primary">Connect Wahoo Account</a>
+                    
                 </div>
             {% endif %}
 
@@ -510,7 +510,7 @@ HTML_TEMPLATE = """
                         {% if authenticated %}
                             <p style="margin-top: 0.5rem; font-size: 0.85rem;">Select a time window above and click "Sync Now".</p>
                         {% else %}
-                            <p style="margin-top: 0.5rem; font-size: 0.85rem;">Connect your Wahoo account above to get started.</p>
+                            <p style="margin-top: 0.5rem; font-size: 0.85rem;">Set your Zwift credentials to get started.</p>
                         {% endif %}
                     </div>
                 {% endif %}
@@ -519,7 +519,7 @@ HTML_TEMPLATE = """
             <div class="card" style="border-color: rgba(245, 158, 11, 0.4);">
                 <div class="card-label" style="color: var(--warning-color);">Configuration Required</div>
                 <p style="margin-top: 0.5rem; line-height: 1.5;">
-                    Please set <code>WAHOO_CLIENT_ID</code> and <code>WAHOO_CLIENT_SECRET</code> environment variables in your <code>.env</code> file or Docker environment to enable Wahoo authorization.
+                    Please set <code>ZWIFT_EMAIL</code> and <code>ZWIFT_PASSWORD</code> environment variables in your <code>.env</code> file or Docker environment to enable Zwift authorization.
                 </p>
             </div>
         {% endif %}
@@ -615,12 +615,12 @@ HTML_TEMPLATE = """
 
 @app.route("/")
 def index():
-    client_id = os.getenv("WAHOO_CLIENT_ID")
-    client_secret = os.getenv("WAHOO_CLIENT_SECRET")
-    missing_env = not bool(client_id and client_secret)
+    email = os.getenv("ZWIFT_EMAIL")
+    password = os.getenv("ZWIFT_PASSWORD")
+    missing_env = not bool(email and password)
 
     tokens = load_tokens()
-    authenticated = bool(tokens and "access_token" in tokens)
+    authenticated = bool(tokens and "access_token" in tokens) or not missing_env
     
     history = load_history()
     activities = get_all_activities()
@@ -641,53 +641,9 @@ def index():
         last_sync=history.get("last_sync"),
         activities=activities,
         message=message,
-        msg_type=msg_type
+        msg_type=msg_type,
+        default_time_window=os.getenv("SYNC_TIME_WINDOW", "1_week")
     )
-
-@app.route("/login")
-def login():
-    client_id = os.getenv("WAHOO_CLIENT_ID")
-    client_secret = os.getenv("WAHOO_CLIENT_SECRET")
-    redirect_uri = os.getenv("WAHOO_REDIRECT_URI", "https://localhost:8085/callback")
-
-    if not client_id or not client_secret:
-        return redirect(url_for("index", message="WAHOO_CLIENT_ID and WAHOO_CLIENT_SECRET must be configured in environment.", msg_type="warning"))
-
-    client = WahooClient(client_id, client_secret, redirect_uri)
-    auth_url = client.get_auth_url()
-    logger.info(f"Redirecting user to Wahoo OAuth URL: {auth_url}")
-    return redirect(auth_url)
-
-@app.route("/callback")
-def callback():
-    code = request.args.get("code")
-    error = request.args.get("error")
-
-    if error:
-        logger.error(f"OAuth callback error: {error}")
-        return redirect(url_for("index", message=f"Wahoo Authorization Error: {error}", msg_type="warning"))
-
-    if not code:
-        return redirect(url_for("index", message="Missing authorization code in callback.", msg_type="warning"))
-
-    client_id = os.getenv("WAHOO_CLIENT_ID")
-    client_secret = os.getenv("WAHOO_CLIENT_SECRET")
-    redirect_uri = os.getenv("WAHOO_REDIRECT_URI", "https://localhost:8085/callback")
-
-    client = WahooClient(client_id, client_secret, redirect_uri)
-
-    try:
-        tokens = client.exchange_code_for_tokens(code)
-        save_tokens(tokens)
-        logger.info("Successfully exchanged OAuth code for tokens.")
-        
-        # Trigger initial sync immediately in background
-        scheduler.run_sync(time_window=os.getenv("SYNC_TIME_WINDOW", "1_week"))
-
-        return redirect(url_for("index", message="Successfully connected to Wahoo! Initial sync executed.", msg_type="success"))
-    except Exception as e:
-        logger.error(f"Failed token exchange: {e}")
-        return redirect(url_for("index", message=f"Failed to authenticate with Wahoo: {str(e)}", msg_type="warning"))
 
 @app.route("/api/sync", methods=["POST"])
 def api_sync():
@@ -713,9 +669,7 @@ def api_status():
 
 def main():
     port = int(os.getenv("PORT", "8085"))
-    redirect_uri = os.getenv("WAHOO_REDIRECT_URI", "https://localhost:8085/callback")
-    
-    use_https = os.getenv("USE_HTTPS", "").lower() in ["true", "1", "yes"] or redirect_uri.startswith("https://")
+    use_https = os.getenv("USE_HTTPS", "").lower() in ["true", "1", "yes"]
     
     ssl_ctx = None
     if use_https:
@@ -728,7 +682,7 @@ def main():
     scheduler.start()
 
     protocol = "https" if ssl_ctx else "http"
-    logger.info(f"Starting dreeve-wahoo-connector server on {protocol}://0.0.0.0:{port}...")
+    logger.info(f"Starting dreeve-zwift-connector server on {protocol}://0.0.0.0:{port}...")
     app.run(host="0.0.0.0", port=port, debug=False, ssl_context=ssl_ctx)
 
 if __name__ == "__main__":

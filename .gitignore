@@ -2,6 +2,7 @@
 .env
 .env.local
 *.env
+docker-compose.override.yml
 
 # Local Config and Downloaded Data
 config/
@@ -28,3 +29,4 @@ env/
 .vscode/
 .DS_Store
 Thumbs.db
+GEMINI.md
