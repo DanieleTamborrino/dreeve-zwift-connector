@@ -668,7 +668,7 @@ def api_status():
     return jsonify(sched_status)
 
 def main():
-    port = int(os.getenv("PORT", "8085"))
+    port = int(os.getenv("PORT", "8087"))
     use_https = os.getenv("USE_HTTPS", "").lower() in ["true", "1", "yes"]
     
     ssl_ctx = None
