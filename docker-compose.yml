@@ -4,21 +4,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/dreeveapp/dreeve-zwift-connector:latest
+    image: ghcr.io/danieletamborrino/dreeve-zwift-connector:latest
     container_name: dreeve-zwift-connector
     restart: unless-stopped
     ports:
-      - "${PORT:-8087}:8087"
+      - "${HOST_PORT:-8087}:8087"
     env_file:
       - .env
     environment:
-      - ZWIFT_EMAIL=${ZWIFT_EMAIL}
-      - ZWIFT_PASSWORD=${ZWIFT_PASSWORD}
+      - ZWIFT_EMAIL=${ZWIFT_EMAIL:?ZWIFT_EMAIL is required}
+      - ZWIFT_PASSWORD=${ZWIFT_PASSWORD:?ZWIFT_PASSWORD is required}
       - SYNC_TIME_WINDOW=${SYNC_TIME_WINDOW:-1_week}
       - SYNC_CRON=${SYNC_CRON:-0 2 * * *}
-      - PORT=${PORT:-8087}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - DATA_DIR=/data
+      - DATA_DIR=${DATA_DIR:-/data}
     volumes:
       - conf_data:${STATE_DIR:-/data/config}
       - actv_data:${WATCH_DIR:-/data/downloads}
