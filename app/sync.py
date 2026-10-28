@@ -3,6 +3,8 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
+import requests
+from app.fit_validator import IncompleteActivityError, validate_fit_file
 from app.zwift_client import ZwiftClient
 
 logger = logging.getLogger("zwift_connector.sync")
@@ -156,6 +158,98 @@ def get_cutoff_datetime(time_window: str):
 
     return None
 
+
+def is_activity_incomplete_metadata(data: dict) -> tuple[bool, str]:
+    """Check Zwift API activity/details payload for incomplete stub activity indicators."""
+    if not isinstance(data, dict):
+        return True, "invalid activity metadata"
+    if data.get("inProgress") is True:
+        return True, "activity is still inProgress"
+    moving_ms = data.get("movingTimeInMs")
+    dist_m = data.get("distanceInMeters")
+    if (moving_ms is None or moving_ms <= 0) and (dist_m is None or dist_m <= 0):
+        return True, f"movingTimeInMs={moving_ms}, distanceInMeters={dist_m}"
+    return False, ""
+
+
+def _extract_activity_id_from_filename(filename: str) -> str:
+    workout_id = filename[:-4] if filename.endswith(".fit") else filename
+    if "_activity_" in filename:
+        workout_id = filename.split("_activity_", 1)[1].replace(".fit", "")
+    elif "_workout_" in filename:
+        workout_id = filename.split("_workout_", 1)[1].replace(".fit", "")
+    return str(workout_id)
+
+
+def cleanup_incomplete_downloads(
+    downloads_dir: str | dict | None = None,
+    downloaded_map: dict | None = None,
+) -> int:
+    """
+    Scan the downloads directory for incomplete or corrupt .fit files,
+    delete them from disk, and purge their entries from sync history.
+    Returns the number of defective files removed.
+    """
+    auto_save_history = False
+    history_obj = None
+
+    if isinstance(downloads_dir, dict):
+        downloads_dir = downloads_dir.get("downloads")
+
+    if downloads_dir is None:
+        paths = get_data_paths()
+        downloads_dir = paths["downloads"]
+
+    if downloaded_map is None:
+        history_obj = load_history()
+        downloaded_map = history_obj.setdefault("downloaded", {})
+        auto_save_history = True
+    elif (
+        "downloaded" in downloaded_map
+        and "last_sync" in downloaded_map
+        and isinstance(downloaded_map.get("downloaded"), dict)
+    ):
+        history_obj = downloaded_map
+        downloaded_map = history_obj["downloaded"]
+
+    if not downloads_dir or not os.path.exists(downloads_dir):
+        return 0
+
+    removed_count = 0
+    for fn in list(os.listdir(downloads_dir)):
+        if not fn.endswith(".fit"):
+            continue
+        file_path = os.path.join(downloads_dir, fn)
+        if not os.path.isfile(file_path):
+            continue
+
+        is_valid, reason = validate_fit_file(file_path)
+        if not is_valid:
+            logger.warning(f"Removing incomplete FIT file '{fn}' from disk: {reason}")
+            try:
+                os.remove(file_path)
+            except OSError as e:
+                logger.error(f"Failed to remove incomplete FIT file '{fn}': {e}")
+                continue
+
+            removed_count += 1
+            extracted_id = _extract_activity_id_from_filename(fn)
+            keys_to_remove = [
+                k
+                for k, v in downloaded_map.items()
+                if str(k) == extracted_id
+                or (isinstance(v, dict) and (v.get("filename") == fn or str(v.get("id")) == extracted_id))
+            ]
+            for k in keys_to_remove:
+                downloaded_map.pop(k, None)
+                logger.info(f"Removed incomplete activity {k} from sync history.")
+
+    if removed_count > 0 and auto_save_history and history_obj is not None:
+        save_history(history_obj)
+
+    return removed_count
+
+
 def perform_sync(time_window: str = None) -> dict:
     if not time_window:
         time_window = os.getenv("SYNC_TIME_WINDOW", "1_week")
@@ -213,8 +307,10 @@ def perform_sync(time_window: str = None) -> dict:
     access_token = tokens["access_token"]
     profile_id = tokens.get("profile_id")
     if not profile_id:
-        # Fallback to decode it if missing
-        profile_id = client._decode_jwt_profile_id(access_token)
+        profile_id = client._fetch_profile_id(access_token)
+        if profile_id:
+            tokens["profile_id"] = profile_id
+            save_tokens(tokens)
         
     if not profile_id:
         return {"status": "error", "message": "Could not determine Zwift profile ID from token."}
@@ -222,6 +318,11 @@ def perform_sync(time_window: str = None) -> dict:
     paths = get_data_paths()
     history = load_history()
     downloaded_map = history.get("downloaded", {})
+
+    removed_files = cleanup_incomplete_downloads(paths["downloads"], downloaded_map)
+    if removed_files > 0:
+        history["downloaded"] = downloaded_map
+        save_history(history)
 
     cutoff_dt = get_cutoff_datetime(time_window)
     if cutoff_dt:
@@ -283,14 +384,47 @@ def perform_sync(time_window: str = None) -> dict:
                 continue
 
             consecutive_existing_count = 0
+
+            if any(k in activity for k in ("inProgress", "movingTimeInMs", "distanceInMeters")):
+                incomplete_meta, meta_reason = is_activity_incomplete_metadata(activity)
+                if incomplete_meta:
+                    logger.warning(
+                        f"Skipping incomplete activity {activity_id} from activity list ({meta_reason})."
+                    )
+                    total_skipped += 1
+                    continue
             
             try:
-                details = client.fetch_activity_details(access_token, activity_id)
-                bucket = details.get("fitFileBucket")
-                key = details.get("fitFileKey")
+                details = {}
+                try:
+                    details = client.fetch_activity_details(access_token, activity_id) or {}
+                except requests.HTTPError as http_err:
+                    status_code = getattr(http_err.response, "status_code", None)
+                    if status_code == 404:
+                        if not (activity.get("fitFileBucket") and activity.get("fitFileKey")):
+                            logger.warning(
+                                f"Activity {activity_id} details returned 404 and no fallback S3 key is present. Skipping."
+                            )
+                            total_skipped += 1
+                            continue
+                    else:
+                        raise
+
+                if any(k in details for k in ("inProgress", "movingTimeInMs", "distanceInMeters")):
+                    incomplete_details, details_reason = is_activity_incomplete_metadata(details)
+                    if incomplete_details:
+                        logger.warning(
+                            f"Skipping incomplete activity {activity_id} from activity details ({details_reason})."
+                        )
+                        total_skipped += 1
+                        continue
+
+                bucket = details.get("fitFileBucket") or activity.get("fitFileBucket")
+                key = details.get("fitFileKey") or activity.get("fitFileKey")
                 
                 if not bucket or not key:
                     logger.warning(f"Activity {activity_id} does not have a FIT file bucket/key. Skipping.")
+                    total_skipped += 1
                     continue
                     
                 client.download_file(bucket, key, dest_path)
@@ -302,6 +436,9 @@ def perform_sync(time_window: str = None) -> dict:
                 }
                 total_new += 1
                 logger.info(f"Successfully downloaded new activity {activity_id} -> {filename}")
+            except IncompleteActivityError as e:
+                logger.warning(f"Skipping incomplete activity {activity_id}: {e}")
+                total_skipped += 1
             except Exception as e:
                 logger.error(f"Failed to download FIT file for activity {activity_id}: {e}")
                 errors.append(f"Activity {activity_id} download error: {str(e)}")
