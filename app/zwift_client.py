@@ -4,6 +4,7 @@ import time
 import requests
 import json
 import base64
+from app.fit_validator import IncompleteActivityError, validate_fit_file
 
 logger = logging.getLogger("zwift_connector.zwift_client")
 
@@ -150,6 +151,10 @@ class ZwiftClient:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
+
+            is_valid, reason = validate_fit_file(tmp_path)
+            if not is_valid:
+                raise IncompleteActivityError(f"Incomplete FIT file ({reason})")
 
             try:
                 os.chmod(tmp_path, 0o666)
