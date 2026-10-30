@@ -128,7 +128,33 @@ class ZwiftClient:
             
         return response.json()
 
-    def download_file(self, bucket: str, key: str, dest_path: str) -> bool:
+    def get_file_info(self, bucket: str, key: str) -> dict | None:
+        """Fetch metadata for an S3 FIT file via HEAD request."""
+        file_url = f"https://{bucket}.s3.amazonaws.com/{key}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        try:
+            response = requests.head(file_url, headers=headers, timeout=15)
+            if response.ok:
+                cl = response.headers.get("Content-Length")
+                return {
+                    "etag": response.headers.get("ETag", "").strip('"'),
+                    "content_length": int(cl) if cl and cl.isdigit() else None,
+                    "last_modified": response.headers.get("Last-Modified"),
+                }
+        except Exception as e:
+            logger.warning(f"Failed to fetch S3 file info for {key}: {e}")
+        return None
+
+    def download_file(
+        self,
+        bucket: str,
+        key: str,
+        dest_path: str,
+        expected_timer_ms: int | float | None = None,
+        expected_distance_m: int | float | None = None,
+    ) -> bool:
         """Download .fit file from Zwift's S3 bucket."""
         tmp_path = dest_path + ".tmp"
         file_url = f"https://{bucket}.s3.amazonaws.com/{key}"
@@ -152,7 +178,11 @@ class ZwiftClient:
                     if chunk:
                         f.write(chunk)
 
-            is_valid, reason = validate_fit_file(tmp_path)
+            is_valid, reason = validate_fit_file(
+                tmp_path,
+                expected_timer_ms=expected_timer_ms,
+                expected_distance_m=expected_distance_m,
+            )
             if not is_valid:
                 raise IncompleteActivityError(f"Incomplete FIT file ({reason})")
 

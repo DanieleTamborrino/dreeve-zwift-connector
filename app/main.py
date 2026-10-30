@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger("zwift_connector")
 
 from app.zwift_client import ZwiftClient
-from app.sync import load_tokens, save_tokens, load_history, get_all_activities, get_data_paths
+from app.sync import load_tokens, save_tokens, load_history, get_all_activities, get_data_paths, delete_activity_record
 from app.scheduler import scheduler
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -283,6 +283,29 @@ HTML_TEMPLATE = """
             background: rgba(255, 255, 255, 0.1);
         }
 
+        .btn-danger-sm {
+            background: rgba(239, 68, 68, 0.12);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.25);
+            padding: 0.3rem 0.65rem;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-danger-sm:hover:not(:disabled) {
+            background: rgba(239, 68, 68, 0.25);
+            border-color: rgba(239, 68, 68, 0.45);
+            color: #fca5a5;
+        }
+
+        .btn-danger-sm:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
         .section-title {
             font-size: 1.1rem;
             font-weight: 600;
@@ -489,16 +512,22 @@ HTML_TEMPLATE = """
                                     <th>Filename</th>
                                     <th>File Size</th>
                                     <th>Downloaded At</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {% for act in activities %}
-                                    <tr>
+                                    <tr id="row-{{ act['id'] }}">
                                         <td><strong>{{ act['id'] }}</strong></td>
                                         <td>{{ act['starts'][:10] if act['starts'] else 'N/A' }}</td>
                                         <td><code>{{ act['filename'] }}</code></td>
                                         <td>{{ act['size_str'] }}</td>
                                         <td>{{ act['downloaded_at'][:19] if act['downloaded_at'] else 'N/A' }}</td>
+                                        <td>
+                                            <button class="btn-danger-sm" data-id="{{ act['id'] }}" onclick="deleteActivity(this)" title="Delete and allow re-download">
+                                                Delete
+                                            </button>
+                                        </td>
                                     </tr>
                                 {% endfor %}
                             </tbody>
@@ -606,6 +635,46 @@ HTML_TEMPLATE = """
             }
         }
 
+        async function deleteActivity(btn) {
+            const id = btn ? btn.dataset.id : null;
+            if (!id) return;
+            if (!confirm(`Are you sure you want to delete activity ${id}?\n\nThis will remove the local FIT file and sync record so it can be re-downloaded on the next sync.`)) {
+                return;
+            }
+            btn.disabled = true;
+            btn.innerText = 'Deleting...';
+            try {
+                const response = await fetch('/api/activities/' + encodeURIComponent(id), {
+                    method: 'DELETE'
+                });
+                const data = await response.json();
+                if (response.ok && data.status === 'success') {
+                    const row = document.getElementById('row-' + id) || btn.closest('tr');
+                    if (row) row.remove();
+                    
+                    const tbody = document.querySelector('table tbody');
+                    const remaining = tbody ? tbody.querySelectorAll('tr').length : 0;
+                    
+                    const totalCount = document.getElementById('stat-total-count');
+                    const tableCount = document.getElementById('stat-table-count');
+                    if (totalCount) totalCount.innerText = remaining;
+                    if (tableCount) tableCount.innerText = 'Showing ' + remaining + ' items';
+
+                    if (remaining === 0) {
+                        window.location.reload();
+                    }
+                } else {
+                    alert('Failed to delete activity: ' + (data.message || 'Unknown error'));
+                    btn.disabled = false;
+                    btn.innerText = 'Delete';
+                }
+            } catch (err) {
+                alert('Error deleting activity: ' + err);
+                btn.disabled = false;
+                btn.innerText = 'Delete';
+            }
+        }
+
         // Live status polling every 3 seconds
         setInterval(checkStatus, 3000);
     </script>
@@ -666,6 +735,19 @@ def api_status():
     sched_status["total_downloaded"] = len(activities)
     sched_status["last_sync_history"] = history.get("last_sync")
     return jsonify(sched_status)
+
+@app.route("/api/activities/<path:activity_id>", methods=["DELETE"])
+def api_delete_activity(activity_id):
+    if scheduler.is_syncing:
+        return jsonify({"status": "conflict", "message": "Cannot delete activity while sync is in progress."}), 409
+    try:
+        success = delete_activity_record(activity_id)
+        if success:
+            return jsonify({"status": "success", "message": f"Activity {activity_id} deleted"})
+        return jsonify({"status": "error", "message": f"Invalid activity id: {activity_id}"}), 400
+    except Exception as e:
+        logger.error(f"Error deleting activity {activity_id}: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 def main():
     port = int(os.getenv("PORT", "8087"))
