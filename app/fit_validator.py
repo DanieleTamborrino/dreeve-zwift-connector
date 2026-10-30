@@ -40,9 +40,12 @@ def validate_fit_file(
     file_path: str,
     min_records: int | None = None,
     min_size_bytes: int | None = None,
+    expected_timer_ms: int | float | None = None,
+    expected_distance_m: int | float | None = None,
 ) -> tuple[bool, str]:
     """
     Validate a binary .fit file to ensure it represents a complete cycling activity.
+    Optionally cross-validates session metrics against expected API metrics.
     Returns (is_valid, reason).
     """
     if min_records is None:
@@ -214,6 +217,39 @@ def validate_fit_file(
                 False,
                 f"invalid session total_timer_time ({session_total_timer_time})",
             )
+
+        if session_total_distance == UINT32_INVALID:
+            session_total_distance = None
+
+        if expected_timer_ms is not None:
+            try:
+                exp_timer = float(expected_timer_ms)
+                if exp_timer > 60000:
+                    min_allowed_timer = exp_timer * 0.95
+                    if session_total_timer_time < min_allowed_timer:
+                        return (
+                            False,
+                            f"FIT session timer ({session_total_timer_time} ms) is below 95% of API moving time ({int(exp_timer)} ms, min {int(min_allowed_timer)} ms)",
+                        )
+            except (ValueError, TypeError):
+                pass
+
+        if expected_distance_m is not None:
+            try:
+                exp_dist = float(expected_distance_m)
+                if exp_dist > 500:
+                    exp_dist_cm = exp_dist * 100.0
+                    min_allowed_dist = exp_dist_cm * 0.95
+                    if (
+                        session_total_distance is None
+                        or session_total_distance < min_allowed_dist
+                    ):
+                        return (
+                            False,
+                            f"FIT session distance ({session_total_distance} cm) is below 95% of API distance ({int(exp_dist)} m, min {int(min_allowed_dist)} cm)",
+                        )
+            except (ValueError, TypeError):
+                pass
 
         return (
             True,
