@@ -283,27 +283,31 @@ HTML_TEMPLATE = """
             background: rgba(255, 255, 255, 0.1);
         }
 
-        .btn-danger-sm {
+        .btn-icon-danger {
             background: rgba(239, 68, 68, 0.12);
-            color: #f87171;
+            color: #ef4444;
             border: 1px solid rgba(239, 68, 68, 0.25);
-            padding: 0.3rem 0.65rem;
+            width: 30px;
+            height: 30px;
             border-radius: 6px;
-            font-size: 0.8rem;
-            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             cursor: pointer;
             transition: all 0.2s ease;
         }
 
-        .btn-danger-sm:hover:not(:disabled) {
+        .btn-icon-danger:hover:not(:disabled) {
             background: rgba(239, 68, 68, 0.25);
-            border-color: rgba(239, 68, 68, 0.45);
-            color: #fca5a5;
+            border-color: rgba(239, 68, 68, 0.5);
+            color: #f87171;
+            transform: scale(1.05);
         }
 
-        .btn-danger-sm:disabled {
+        .btn-icon-danger:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+            transform: none;
         }
 
         .section-title {
@@ -323,7 +327,7 @@ HTML_TEMPLATE = """
         }
 
         th {
-            padding: 0.75rem 1rem;
+            padding: 0.75rem 0.75rem;
             color: var(--text-secondary);
             font-size: 0.75rem;
             text-transform: uppercase;
@@ -332,8 +336,15 @@ HTML_TEMPLATE = """
         }
 
         td {
-            padding: 0.85rem 1rem;
+            padding: 0.85rem 0.75rem;
             border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        th:last-child, td:last-child {
+            width: 44px;
+            text-align: center;
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
         }
 
         tr:hover td {
@@ -512,7 +523,7 @@ HTML_TEMPLATE = """
                                     <th>Filename</th>
                                     <th>File Size</th>
                                     <th>Downloaded At</th>
-                                    <th>Actions</th>
+                                    <th style="width: 44px; text-align: center;" aria-label="Actions"></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -523,9 +534,14 @@ HTML_TEMPLATE = """
                                         <td><code>{{ act['filename'] }}</code></td>
                                         <td>{{ act['size_str'] }}</td>
                                         <td>{{ act['downloaded_at'][:19] if act['downloaded_at'] else 'N/A' }}</td>
-                                        <td>
-                                            <button class="btn-danger-sm" data-id="{{ act['id'] }}" onclick="deleteActivity(this)" title="Delete and allow re-download">
-                                                Delete
+                                        <td style="text-align: center;">
+                                            <button class="btn-icon-danger" data-id="{{ act['id'] }}" onclick="deleteActivity(this)" title="Delete and allow re-download" aria-label="Delete activity">
+                                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                                    <line x1="10" y1="11" x2="10" y2="17"></line>
+                                                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                                                </svg>
                                             </button>
                                         </td>
                                     </tr>
@@ -642,7 +658,7 @@ HTML_TEMPLATE = """
                 return;
             }
             btn.disabled = true;
-            btn.innerText = 'Deleting...';
+            btn.style.opacity = '0.5';
             try {
                 const response = await fetch('/api/activities/' + encodeURIComponent(id), {
                     method: 'DELETE'
@@ -666,12 +682,12 @@ HTML_TEMPLATE = """
                 } else {
                     alert('Failed to delete activity: ' + (data.message || 'Unknown error'));
                     btn.disabled = false;
-                    btn.innerText = 'Delete';
+                    btn.style.opacity = '1';
                 }
             } catch (err) {
                 alert('Error deleting activity: ' + err);
                 btn.disabled = false;
-                btn.innerText = 'Delete';
+                btn.style.opacity = '1';
             }
         }
 
